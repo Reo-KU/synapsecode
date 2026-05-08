@@ -48,6 +48,8 @@ def run(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config TOML."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Claude model."),
     working_dir: str = typer.Option(".", "--dir", "-d", help="Working directory."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Simulate pipeline without calling agents."),
+    log_file: Optional[str] = typer.Option(None, "--log", help="Write detailed logs to file."),
 ) -> None:
     """Run the full design->implement->review->fix->commit pipeline."""
     cfg = load_config(config_path)
@@ -58,6 +60,10 @@ def run(
         cfg.orchestrator.verbose = True
     if model:
         cfg.claude.model = model
+    if dry_run:
+        cfg.orchestrator.dry_run = True
+    if log_file:
+        cfg.orchestrator.log_file = log_file
 
     registry = AgentRegistry(cfg, claude_only=claude_only)
     git = GitManager(working_dir)

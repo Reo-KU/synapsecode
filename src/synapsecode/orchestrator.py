@@ -1,10 +1,11 @@
 """Workflow orchestrator — the core state machine."""
 
 import json
+import logging
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from synapsecode.agents.base import AgentRequest, Role
+from synapsecode.agents.base import AgentBackend, AgentRequest, AgentResponse, Role
 from synapsecode.agents.registry import AgentRegistry
 from synapsecode.config import SynapseConfig
 from synapsecode.git.manager import GitManager
@@ -22,6 +23,31 @@ from synapsecode.utils.templates import (
     implementer_prompt,
     reviewer_prompt,
 )
+
+
+logger = logging.getLogger("synapsecode")
+
+_DRY_RUN_REVIEW = json.dumps({"verdict": "PASS", "summary": "Dry-run: auto-pass", "issues": []})
+
+_DRY_RUN_RESPONSES: Dict[str, str] = {
+    Role.DESIGNER: "## Dry-run Design Plan\n1. (simulated) Create required files\n2. (simulated) Implement logic",
+    Role.IMPLEMENTER: "(dry-run) Implementation simulated — no files changed.",
+    Role.REVIEWER: _DRY_RUN_REVIEW,
+    Role.FIXER: "(dry-run) Fix simulated.",
+}
+
+
+class DryRunBackend(AgentBackend):
+    """Fake backend that returns canned responses without calling any CLI."""
+
+    name = "dry-run"
+
+    async def is_available(self) -> bool:
+        return True
+
+    async def execute(self, request: AgentRequest) -> AgentResponse:
+        text = _DRY_RUN_RESPONSES.get(request.role, "(dry-run)")
+        return AgentResponse(text=text, cost_usd=0.0, duration_seconds=0.0, model="dry-run", success=True)
 
 
 class Phase(str, Enum):
@@ -52,10 +78,31 @@ class Orchestrator:
         self.db = db
         self.ui = ui
         self.costs = cost_tracker
+        self.dry_run = config.orchestrator.dry_run
+        self._dry_backend = DryRunBackend() if self.dry_run else None
+
+        # Setup file logging if configured
+        if config.orchestrator.log_file:
+            handler = logging.FileHandler(config.orchestrator.log_file, encoding="utf-8")
+            handler.setFormatter(logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            ))
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+
+    def _backend_for(self, role: Role) -> AgentBackend:
+        """Return the dry-run backend if enabled, else the real one."""
+        if self._dry_backend is not None:
+            return self._dry_backend
+        return self.registry.get_backend(role)
 
     async def run(self, user_request: str) -> None:
         """Execute the full orchestration pipeline."""
         self.ui.banner()
+
+        if self.dry_run:
+            self.ui.info("[dry-run] No agents will be called")
+            logger.info("Dry-run mode enabled")
 
         # Check agent availability
         self.ui.info("Checking agent availability...")
@@ -132,8 +179,9 @@ class Orchestrator:
         self, session_id: int, user_request: str, working_dir: str
     ) -> str:
         role = Role.DESIGNER
-        backend = self.registry.get_backend(role)
+        backend = self._backend_for(role)
         self.ui.phase("DESIGN", backend.name)
+        logger.info("Phase: DESIGN (agent=%s)", backend.name)
 
         file_tree = self.git.file_tree() if self.git.is_repo() else "(no git repo)"
         prompt = designer_prompt(user_request, file_tree)
@@ -165,8 +213,9 @@ class Orchestrator:
         self, session_id: int, design_plan: str, working_dir: str
     ) -> bool:
         role = Role.IMPLEMENTER
-        backend = self.registry.get_backend(role)
+        backend = self._backend_for(role)
         self.ui.phase("IMPLEMENT", backend.name)
+        logger.info("Phase: IMPLEMENT (agent=%s)", backend.name)
 
         prompt = implementer_prompt(design_plan)
         task_id = self.db.create_task(session_id, Phase.IMPLEMENTING.value, backend.name)
@@ -195,8 +244,9 @@ class Orchestrator:
         self, session_id: int, design_plan: str, working_dir: str
     ) -> Optional[Dict[str, Any]]:
         role = Role.REVIEWER
-        backend = self.registry.get_backend(role)
+        backend = self._backend_for(role)
         self.ui.phase("REVIEW", backend.name)
+        logger.info("Phase: REVIEW (agent=%s)", backend.name)
 
         diff = self.git.diff() if self.git.is_repo() else "(no git diff available)"
         if not diff.strip():
@@ -234,8 +284,9 @@ class Orchestrator:
         self, session_id: int, issues: list, working_dir: str
     ) -> bool:
         role = Role.FIXER
-        backend = self.registry.get_backend(role)
+        backend = self._backend_for(role)
         self.ui.phase("FIX", backend.name)
+        logger.info("Phase: FIX (agent=%s)", backend.name)
 
         diff = self.git.diff() if self.git.is_repo() else ""
         prompt = fixer_prompt(json.dumps(issues, indent=2), diff)
@@ -291,6 +342,11 @@ class Orchestrator:
             self.git.stage_all()
 
     def _record_call(self, session_id, task_id, agent, role, prompt, response):
+        role_val = role.value if hasattr(role, "value") else str(role)
+        logger.debug(
+            "Agent call: agent=%s role=%s cost=$%.4f duration=%.1fs success=%s",
+            agent, role_val, response.cost_usd, response.duration_seconds, response.success,
+        )
         self.db.record_agent_call(
             task_id=task_id,
             agent=agent,

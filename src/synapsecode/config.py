@@ -20,6 +20,8 @@ class OrchestratorConfig:
     max_iterations: int = 3
     auto_commit: bool = False
     verbose: bool = False
+    dry_run: bool = False
+    log_file: Optional[str] = None
 
 
 @dataclass
@@ -85,7 +87,7 @@ def load_config(path: Optional[str] = None) -> SynapseConfig:
     # Orchestrator
     if "orchestrator" in raw:
         orch = raw["orchestrator"]
-        for key in ("max_iterations", "auto_commit", "verbose"):
+        for key in ("max_iterations", "auto_commit", "verbose", "dry_run", "log_file"):
             if key in orch:
                 setattr(cfg.orchestrator, key, orch[key])
 
