@@ -1,5 +1,7 @@
 # SynapseCode
 
+Synapsecode was finished. It was changed for multi-agent orchestra. Please use multi-agent orchestra repositry.
+
 **Multi-agent orchestration layer for Claude Code + Codex CLI**
 
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
