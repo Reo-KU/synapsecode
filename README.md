@@ -1,6 +1,6 @@
-# SynapseCode
+# SynapseCode was finished. It was changed for multi-agent orchestra. Please use multi-agent orchestra repositry.
 
-#Synapsecode was finished. It was changed for multi-agent orchestra. Please use multi-agent orchestra repositry.
+
 
 **Multi-agent orchestration layer for Claude Code + Codex CLI**
 
